@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  weather-backend:
+    build: .
+    ports:
+      - "8000:8000"
+    # 從上一層目錄讀取 .env (如果需要在 backend 目錄下獨立運作，請確保 .env 存在或手動指定變數)
+    env_file:
+      - .env
+    environment:
+      - CWA_API_KEY=${VITE_CWA_API_KEY}
+      - GEMINI_API_KEY=${VITE_GEMINI_API_KEY}
+      - AI_PROVIDER=${AI_PROVIDER}
+      - AI_MODEL=${AI_MODEL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    volumes:
+      - .:/app
+
+  weather-scheduler:
+    build: .
+    command: ["python", "scheduler.py"]
+    # 讓排程器知道後端的位址
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - .:/app
+    depends_on:
+      - weather-backend

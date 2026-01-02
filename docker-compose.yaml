@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - CWA_API_KEY=${VITE_CWA_API_KEY}
+      - GEMINI_API_KEY=${VITE_GEMINI_API_KEY}
+    volumes:
+      - ./backend:/app
+
+  weather-app:
+    build: .
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    env_file:
+      - .env
+    # Linux/Mac 上可能需要這個來避免權限問題，Windows 上通常不需要，但保留無妨
+    user: "node" 

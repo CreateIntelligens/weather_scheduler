@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+httpx
+python-dotenv
+apscheduler
+opencc-python-reimplemented
