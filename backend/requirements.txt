@@ -4,3 +4,5 @@ httpx
 python-dotenv
 apscheduler
 opencc-python-reimplemented
+sqlalchemy
+psycopg2-binary

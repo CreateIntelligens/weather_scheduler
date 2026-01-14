@@ -1,14 +1,30 @@
 version: '3.8'
 
 services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=weather_user
+      - POSTGRES_PASSWORD=weather_password
+      - POSTGRES_DB=weather_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weather_user -d weather_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   weather-backend:
     build: .
     ports:
       - "8000:8000"
-    # 從上一層目錄讀取 .env (如果需要在 backend 目錄下獨立運作，請確保 .env 存在或手動指定變數)
+    # 假設 .env 在上一層目錄 (專案根目錄)
     env_file:
-      - .env
+      - ../.env
     environment:
+      - DATABASE_URL=postgresql://weather_user:weather_password@db:5432/weather_db
       - CWA_API_KEY=${VITE_CWA_API_KEY}
       - GEMINI_API_KEY=${VITE_GEMINI_API_KEY}
       - AI_PROVIDER=${AI_PROVIDER}
@@ -17,14 +33,21 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY}
     volumes:
       - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
 
   weather-scheduler:
     build: .
     command: ["python", "scheduler.py"]
-    # 讓排程器知道後端的位址
+    env_file:
+      - ../.env
     environment:
       - PYTHONUNBUFFERED=1
     volumes:
       - .:/app
     depends_on:
       - weather-backend
+
+volumes:
+  postgres_data:

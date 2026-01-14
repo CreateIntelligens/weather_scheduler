@@ -2,36 +2,20 @@ import time
 import httpx
 from apscheduler.schedulers.blocking import BlockingScheduler
 from datetime import datetime
-from opencc import OpenCC
 
-# 後端 API 的網址 (在 Docker 網路中，host 名稱通常是 service name)
-# 這裡預設為 weather-backend，這是我們在 docker-compose 中定義的服務名稱
-BACKEND_URL = "http://weather-backend:8000/api/weather?refresh=true"
+# Backend 內部 URL
+BACKEND_BASE_URL = "http://weather-backend:8000"
+UPDATE_WEATHER_URL = f"{BACKEND_BASE_URL}/api/weather?refresh=true"
+CHECK_WARNINGS_URL = f"{BACKEND_BASE_URL}/api/cron/check-warnings"
+
 TTS_API_URL = "http://10.9.0.35:5456/api/stream-speak"
-TTS_ENGINE = "indextts" # Options: "indextts", "edgetts", etc.
+TTS_ENGINE = "indextts"
 
 def send_to_tts_api(text):
-    """將 AI 報告發送到 TTS 服務"""
+    """(Legacy) 直接發送 TTS，現主要由 Backend 處理，但在一般天氣更新時仍保留此邏輯"""
     print(f"[{datetime.now()}] Sending report to TTS API (Engine: {TTS_ENGINE})...")
-    
-    # # 若使用 indextts，需將繁體中文轉為簡體中文
-    # if TTS_ENGINE == "indextts":
-    #     try:
-    #         print(f"[{datetime.now()}] Original (Traditional): {text[:100]}...")
-    #         cc = OpenCC('t2s') # t2s: Traditional to Simplified
-    #         text = cc.convert(text)
-    #         print(f"[{datetime.now()}] Converted (Simplified): {text[:100]}...")
-    #         print(f"[{datetime.now()}] Converted text to Simplified Chinese for indextts.")
-    #     except Exception as e:
-    #         print(f"[{datetime.now()}] OpenCC Conversion Error: {e}")
-
     try:
-        # 根據您的需求，包含 engine 欄位，值固定為 indextts
-        payload = {
-            "engine": TTS_ENGINE, 
-            "text": text
-        }
-        
+        payload = {"engine": TTS_ENGINE, "text": text}
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(TTS_API_URL, json=payload)
             if resp.status_code == 200:
@@ -42,57 +26,56 @@ def send_to_tts_api(text):
         print(f"[{datetime.now()}] TTS API Connection Error: {e}")
 
 def job_update_weather():
-    print(f"[{datetime.now()}] Triggering scheduled weather update...")
+    """每小時更新一般天氣"""
+    print(f"[{datetime.now()}] [Job] Triggering hourly weather update...")
     try:
         with httpx.Client(timeout=60.0) as client:
-            resp = client.get(BACKEND_URL)
+            resp = client.get(UPDATE_WEATHER_URL)
             if resp.status_code == 200:
                 data = resp.json()
-                cities_count = len(data.get("cities", []))
                 ai_report = data.get("ai_report", "")
-                ai_report_preview = ai_report[:50] + "..."
-                
-                print(f"[{datetime.now()}] Update SUCCESS!")
-                print(f" -> Cities Fetched: {cities_count}")
-                print(f" -> AI Report Preview: {ai_report_preview}")
-                
-                # 成功後，轉發給 TTS API
+                print(f"[{datetime.now()}] Weather update SUCCESS. AI Report length: {len(ai_report)}")
+                # 一般天氣更新後，仍需在此處呼叫 TTS，因為 Backend 的 GET /api/weather 不會主動播報
                 if ai_report:
                     send_to_tts_api(ai_report)
             else:
-                print(f"[{datetime.now()}] Update failed: {resp.status_code} - {resp.text}")
+                print(f"[{datetime.now()}] Weather update failed: {resp.status_code}")
     except Exception as e:
-        print(f"[{datetime.now()}] Connection error: {e}")
+        print(f"[{datetime.now()}] Weather update connection error: {e}")
+
+def job_check_warnings():
+    """每 10 分鐘檢查是否有新特報"""
+    print(f"[{datetime.now()}] [Job] Checking for weather warnings...")
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            # 使用 POST 觸發後端的檢查邏輯
+            resp = client.post(CHECK_WARNINGS_URL)
+            if resp.status_code == 200:
+                result = resp.json()
+                count = result.get("new_warnings_processed", 0)
+                print(f"[{datetime.now()}] Warning check complete. New warnings processed: {count}")
+            else:
+                print(f"[{datetime.now()}] Warning check failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[{datetime.now()}] Warning check connection error: {e}")
 
 if __name__ == "__main__":
     print("Starting Weather Scheduler...")
     
-    # 建立排程器
     scheduler = BlockingScheduler()
     
-    # 設定排程：每小時的第 0 分鐘執行 (cron style)
-    # 這樣會確保在 1:00, 2:00, 3:00... 準時執行
+    # 1. 每小時整點執行一般天氣預報
     scheduler.add_job(job_update_weather, 'cron', minute=0)
     
-    # 程式啟動時先立即執行一次，確保快取是熱的
-    # 加入重試機制，因為後端可能還沒完全啟動
-    max_retries = 12 # 嘗試 1 分鐘 (12 * 5s)
-    for i in range(max_retries):
-        try:
-            print(f"Initial update attempt {i+1}/{max_retries}...")
-            # 這裡我們稍微修改一下 job_update_weather 的行為，讓它拋出異常以便重試
-            with httpx.Client(timeout=60.0) as client:
-                resp = client.get(BACKEND_URL)
-                if resp.status_code == 200:
-                    print(f"[{datetime.now()}] Initial update successful!")
-                    break
-                else:
-                    print(f"Update failed with status {resp.status_code}")
-        except Exception as e:
-            print(f"Connection failed ({e}), retrying in 5 seconds...")
-            time.sleep(5)
-    else:
-        print("Warning: Initial update failed after multiple attempts. Scheduler will continues to run for next hour.")
+    # 2. 每 10 分鐘執行特報檢查 (*/10)
+    scheduler.add_job(job_check_warnings, 'cron', minute='*/10')
+    
+    # 程式啟動時，先等待 Backend Ready，然後立即執行一次檢查
+    print("Waiting for backend to be ready...")
+    time.sleep(10) # 等待 Backend 與 DB 連線建立
+    
+    # 立即執行一次特報檢查
+    job_check_warnings()
     
     try:
         scheduler.start()
