@@ -16,7 +16,7 @@ RUN npm install
 COPY --chown=node:node . .
 
 # Expose Vite default port
-EXPOSE 5173
+EXPOSE 5175
 
 # Start development server
 CMD ["npm", "run", "dev", "--", "--host"]

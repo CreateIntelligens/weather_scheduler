@@ -14,16 +14,16 @@ def send_to_tts_api(text):
     """將 AI 報告發送到 TTS 服務"""
     print(f"[{datetime.now()}] Sending report to TTS API (Engine: {TTS_ENGINE})...")
     
-    # 若使用 indextts，需將繁體中文轉為簡體中文
-    if TTS_ENGINE == "indextts":
-        try:
-            print(f"[{datetime.now()}] Original (Traditional): {text[:100]}...")
-            cc = OpenCC('t2s') # t2s: Traditional to Simplified
-            text = cc.convert(text)
-            print(f"[{datetime.now()}] Converted (Simplified): {text[:100]}...")
-            print(f"[{datetime.now()}] Converted text to Simplified Chinese for indextts.")
-        except Exception as e:
-            print(f"[{datetime.now()}] OpenCC Conversion Error: {e}")
+    # # 若使用 indextts，需將繁體中文轉為簡體中文
+    # if TTS_ENGINE == "indextts":
+    #     try:
+    #         print(f"[{datetime.now()}] Original (Traditional): {text[:100]}...")
+    #         cc = OpenCC('t2s') # t2s: Traditional to Simplified
+    #         text = cc.convert(text)
+    #         print(f"[{datetime.now()}] Converted (Simplified): {text[:100]}...")
+    #         print(f"[{datetime.now()}] Converted text to Simplified Chinese for indextts.")
+    #     except Exception as e:
+    #         print(f"[{datetime.now()}] OpenCC Conversion Error: {e}")
 
     try:
         # 根據您的需求，包含 engine 欄位，值固定為 indextts
