@@ -1,8 +1,9 @@
 # Node.js
 node_modules/
 dist/
-.env
-.env.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Python
 __pycache__/
@@ -11,15 +12,21 @@ __pycache__/
 .venv/
 env/
 venv/
+*.egg-info/
+
+# Environment Variables
 .env
+.env.local
+.env.*
+backend/.env
 
 # Docker
 .dockerignore
+postgres_data/
+backend/postgres_data/
 
-# IDE
+# IDE & OS
 .vscode/
 .idea/
-
-# OS
 .DS_Store
 Thumbs.db

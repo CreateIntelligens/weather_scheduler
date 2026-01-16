@@ -1,8 +1,10 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './WeatherDashboard'
+import WeatherDashboard from './WeatherDashboard.jsx'
 import './index.css'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <App />
+  <React.StrictMode>
+    <WeatherDashboard />
+  </React.StrictMode>,
 )

@@ -7,6 +7,7 @@ from datetime import datetime
 BACKEND_BASE_URL = "http://weather-backend:8000"
 UPDATE_WEATHER_URL = f"{BACKEND_BASE_URL}/api/weather?refresh=true"
 CHECK_WARNINGS_URL = f"{BACKEND_BASE_URL}/api/cron/check-warnings"
+CHECK_EARTHQUAKES_URL = f"{BACKEND_BASE_URL}/api/cron/check-earthquakes"
 
 TTS_API_URL = "http://10.9.0.35:5456/api/stream-speak"
 TTS_ENGINE = "indextts"
@@ -59,16 +60,35 @@ def job_check_warnings():
     except Exception as e:
         print(f"[{datetime.now()}] Warning check connection error: {e}")
 
+def job_check_earthquakes():
+    """每 1 分鐘檢查是否有新地震"""
+    print(f"[{datetime.now()}] [Job] Checking for earthquakes...")
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post(CHECK_EARTHQUAKES_URL)
+            if resp.status_code == 200:
+                result = resp.json()
+                count = result.get("new_earthquakes_processed", 0)
+                print(f"[{datetime.now()}] Earthquake check complete. New eqs processed: {count}")
+            else:
+                print(f"[{datetime.now()}] Earthquake check failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[{datetime.now()}] Earthquake check connection error: {e}")
+
 if __name__ == "__main__":
     print("Starting Weather Scheduler...")
     
     scheduler = BlockingScheduler()
     
-    # 1. 每小時整點執行一般天氣預報
-    scheduler.add_job(job_update_weather, 'cron', minute=0)
-    
-    # 2. 每 10 分鐘執行特報檢查 (*/10)
+    # 優先順序調整：
+    # 1. 每 1 分鐘執行地震檢查 (最緊急)
+    scheduler.add_job(job_check_earthquakes, 'cron', minute='*')
+
+    # 2. 每 10 分鐘執行特報檢查 (次緊急)
     scheduler.add_job(job_check_warnings, 'cron', minute='*/10')
+
+    # 3. 每小時整點執行一般天氣預報 (例行性)
+    scheduler.add_job(job_update_weather, 'cron', minute=0)
     
     # 程式啟動時，先等待 Backend Ready，然後立即執行一次檢查
     print("Waiting for backend to be ready...")
@@ -76,6 +96,7 @@ if __name__ == "__main__":
     
     # 立即執行一次特報檢查
     job_check_warnings()
+    job_check_earthquakes()
     
     try:
         scheduler.start()

@@ -7,6 +7,8 @@ from typing import List, Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 
 # DB imports
@@ -65,6 +67,31 @@ class WarningRecord(BaseModel):
     issue_time: str
     content: str
     affected_areas: str
+    ai_report: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+class EarthquakeRecord(BaseModel):
+    id: int
+    earthquake_no: int
+    report_type: str
+    origin_time: str
+    location: str
+    magnitude: str
+    content: str
+    intensity_summary: Optional[str] = None
+    ai_report: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+class ForecastRecord(BaseModel):
+    id: int
+    report_time: datetime
+    overview: Optional[str] = None
     ai_report: Optional[str] = None
     created_at: datetime
 
@@ -193,16 +220,28 @@ async def fetch_cities_forecast(client: httpx.AsyncClient) -> List[CityWeather]:
 weather_cache = {"data": None, "last_updated": None}
 
 @app.get("/api/weather", response_model=WeatherResponse)
-async def get_weather(refresh: bool = False):
+async def get_weather(refresh: bool = False, db: Session = Depends(get_db)):
     global weather_cache
     now = datetime.now()
     
-    if not refresh and weather_cache["data"] and weather_cache["last_updated"]:
-        if now - weather_cache["last_updated"] < timedelta(minutes=55):
-            print("Using cached weather data")
-            return weather_cache["data"]
+    # --- 1. 如果不是強制更新，先從 DB 抓取最新的一筆紀錄 ---
+    if not refresh:
+        latest_forecast = db.query(models.WeatherForecast).order_by(models.WeatherForecast.created_at.desc()).first()
+        if latest_forecast:
+            print(f"Returning latest forecast from DB (ID: {latest_forecast.id})")
+            try:
+                cities_list = json.loads(latest_forecast.cities_data)
+                return WeatherResponse(
+                    overview=latest_forecast.overview or "",
+                    cities=[CityWeather(**c) for c in cities_list],
+                    ai_report=latest_forecast.ai_report or ""
+                )
+            except Exception as e:
+                print(f"Error parsing DB cities_data: {e}")
+                # 失敗則往下走抓取邏輯
 
-    print("Fetching fresh weather data...")
+    # --- 2. 抓取新資料並生成 AI 報告 (只有 refresh=True 或 DB 為空時執行) ---
+    print("Fetching fresh weather data and generating AI report...")
     async with httpx.AsyncClient() as client:
         overview = await fetch_overview(client)
         cities = await fetch_cities_forecast(client)
@@ -228,10 +267,50 @@ async def get_weather(refresh: bool = False):
         weather_cache["data"] = response_data
         weather_cache["last_updated"] = now
         
+        # Save to DB
+        try:
+            cities_json = json.dumps([c.dict() for c in cities], ensure_ascii=False)
+            new_forecast = models.WeatherForecast(
+                overview=overview,
+                cities_data=cities_json,
+                ai_report=ai_report
+            )
+            db.add(new_forecast)
+            db.commit()
+            print(f"Saved fresh forecast to DB with ID: {new_forecast.id}")
+        except Exception as e:
+            print(f"Error saving forecast to DB: {e}")
+
         return response_data
 
+@app.get("/api/forecasts", response_model=List[ForecastRecord])
+def get_forecasts(skip: int = 0, limit: int = 10, q: Optional[str] = None, db: Session = Depends(get_db)):
+    query = db.query(models.WeatherForecast)
+    
+    if q:
+        # Search in AI report or Overview
+        # Note: SQLite/Postgres date searching via string is tricky, let's stick to text content first
+        # For date, user can type "2026-01-14" and we can try to match it if we cast to string, 
+        # but simpler to just search text fields for now.
+        search = f"%{q}%"
+        query = query.filter(or_(
+            models.WeatherForecast.ai_report.ilike(search),
+            models.WeatherForecast.overview.ilike(search)
+        ))
+    
+    forecasts = query.order_by(models.WeatherForecast.created_at.desc()).offset(skip).limit(limit).all()
+    return forecasts
+
+@app.get("/api/config")
+def get_config():
+    """回傳後端設定資訊"""
+    return {
+        "ai_provider": AI_PROVIDER,
+        "ai_model": AI_MODEL
+    }
+
 @app.post("/api/weather/broadcast")
-async def manual_weather_broadcast():
+async def manual_weather_broadcast(db: Session = Depends(get_db)):
     """
     手動觸發：抓取最新天氣、生成 AI 報告並立即語音播報
     """
@@ -259,6 +338,22 @@ async def manual_weather_broadcast():
         # 立即播報
         await send_to_tts_api(ai_report)
         
+        # Save to DB
+        try:
+            # Serialize cities data to JSON string for storage
+            cities_json = json.dumps([c.dict() for c in cities], ensure_ascii=False)
+            
+            new_forecast = models.WeatherForecast(
+                overview=overview,
+                cities_data=cities_json,
+                ai_report=ai_report
+            )
+            db.add(new_forecast)
+            db.commit()
+            print(f"Saved manual broadcast forecast to DB with ID: {new_forecast.id}")
+        except Exception as e:
+            print(f"Error saving forecast to DB: {e}")
+        
         return {"status": "success", "ai_report": ai_report}
 
 @app.get("/api/weather/{city_name}", response_model=CityWeather)
@@ -283,8 +378,19 @@ async def get_city_weather(city_name: str):
 
 # 2. 新增：查詢歷史特報
 @app.get("/api/warnings", response_model=List[WarningRecord])
-def get_warnings(limit: int = 10, db: Session = Depends(get_db)):
-    warnings = db.query(models.WeatherWarning).order_by(models.WeatherWarning.created_at.desc()).limit(limit).all()
+def get_warnings(skip: int = 0, limit: int = 10, q: Optional[str] = None, db: Session = Depends(get_db)):
+    query = db.query(models.WeatherWarning)
+    
+    if q:
+        search = f"%{q}%"
+        query = query.filter(or_(
+            models.WeatherWarning.title.ilike(search),
+            models.WeatherWarning.content.ilike(search),
+            models.WeatherWarning.affected_areas.ilike(search),
+            models.WeatherWarning.issue_time.ilike(search) # Date search via string match
+        ))
+
+    warnings = query.order_by(models.WeatherWarning.issue_time.desc()).offset(skip).limit(limit).all()
     return warnings
 
 # 2.1 新增：手動重新播報特報
@@ -418,24 +524,239 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
                 await send_to_tts_api(ai_report)
                 
                 # 存入 DB
-                new_warning = models.WeatherWarning(
-                    dataset_id="W-C0033-002",
-                    issue_time=issue_time,
-                    title=dataset_desc,
-                    content=content_text,
-                    affected_areas=affected_areas_str,
-                    ai_report=ai_report,
-                    is_reported=True
-                )
-                db.add(new_warning)
-                db.commit()
-                new_warnings_count += 1
+                try:
+                    new_warning = models.WeatherWarning(
+                        dataset_id="W-C0033-002",
+                        issue_time=issue_time,
+                        title=dataset_desc,
+                        content=content_text,
+                        affected_areas=affected_areas_str,
+                        ai_report=ai_report,
+                        is_reported=True
+                    )
+                    db.add(new_warning)
+                    db.commit()
+                    new_warnings_count += 1
+                except IntegrityError:
+                    db.rollback()
+                    print(f"Duplicate warning record ignored: {dataset_desc} ({issue_time})")
+                except Exception as e:
+                    db.rollback()
+                    print(f"Error saving warning record: {e}")
                 
     except Exception as e:
         print(f"Error processing warnings: {e}")
         return {"status": "error", "message": str(e)}
 
     return {"status": "success", "new_warnings_processed": new_warnings_count}
+
+# 4. 新增：地震相關 Endpoints
+
+@app.get("/api/earthquakes", response_model=List[EarthquakeRecord])
+def get_earthquakes(skip: int = 0, limit: int = 10, q: Optional[str] = None, db: Session = Depends(get_db)):
+    query = db.query(models.EarthquakeAlert)
+    
+    if q:
+        search = f"%{q}%"
+        query = query.filter(or_(
+            models.EarthquakeAlert.location.ilike(search),
+            models.EarthquakeAlert.content.ilike(search),
+            models.EarthquakeAlert.origin_time.ilike(search)
+        ))
+
+    eqs = query.order_by(models.EarthquakeAlert.origin_time.desc()).offset(skip).limit(limit).all()
+    return eqs
+
+@app.post("/api/earthquakes/{eq_id}/re-report")
+async def re_report_earthquake(eq_id: int, db: Session = Depends(get_db)):
+    """
+    手動觸發：重新生成 AI 地震報告並播報
+    """
+    eq = db.query(models.EarthquakeAlert).filter(models.EarthquakeAlert.id == eq_id).first()
+    if not eq:
+        raise HTTPException(status_code=404, detail="找不到該地震紀錄 ID")
+
+    print(f"[{datetime.now()}] Manually re-reporting earthquake: {eq.earthquake_no}")
+
+    system_prompt = """
+    你現在是一位專業的新聞主播，負責插播即時地震快訊。
+    請根據接收到的地震資料，撰寫一段廣播稿。
+    
+    【撰寫要求】
+    1. **語氣緊急且嚴肅**，但保持冷靜。
+    2. 開頭直接播報：「氣象署發布顯著有感地震報告...」。
+    3. 清楚唸出：發生時間 (轉為口語，如剛才、今天晚間)、震央位置、芮氏規模。
+    4. **特別強調**：最大震度達到 3 級以上的縣市，若無則強調「最大震度 x 級」。
+    5. 提醒民眾保持冷靜，注意餘震。
+    6. 字數約 150-200 字。
+    """
+    
+    user_prompt = f"""
+    【地震資料】
+    編號: {eq.earthquake_no}
+    時間: {eq.origin_time}
+    規模: {eq.magnitude}
+    深度: {eq.depth} 公里
+    位置: {eq.location}
+    各地震度概要: {eq.intensity_summary}
+    氣象署簡述: {eq.content}
+    """
+    
+    ai_report = await generate_ai_text(system_prompt, user_prompt)
+    await send_to_tts_api(ai_report)
+    
+    eq.ai_report = ai_report
+    db.commit()
+    
+    return {"status": "success", "ai_report": ai_report}
+
+@app.post("/api/cron/check-earthquakes")
+async def check_and_process_earthquakes(db: Session = Depends(get_db)):
+    """
+    每分鐘檢查：抓取 CWA E-A0015-001 -> 比對 DB -> 生成報告 -> 播報 -> 存檔
+    """
+    print(f"[{datetime.now()}] Checking for earthquakes...")
+    if not CWA_API_KEY:
+        return {"status": "error", "message": "No CWA API Key"}
+        
+    url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0015-001?Authorization={CWA_API_KEY}&format=JSON"
+    
+    new_eq_count = 0
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            # CWA 地震資料結構
+            records = data.get("records", {}).get("Earthquake", [])
+            if not isinstance(records, list): records = [records]
+
+            for item in records:
+                eq_no = item.get("EarthquakeNo") # Unique ID
+                if not eq_no: continue
+                
+                # Check DB
+                exists = db.query(models.EarthquakeAlert).filter(models.EarthquakeAlert.earthquake_no == eq_no).first()
+                if exists:
+                    # 假設地震編號相同就是同一筆，不做更新
+                    continue
+                
+                # New Earthquake Found
+                print(f"New Earthquake Found: {eq_no}")
+                
+                report_content = item.get("ReportContent", "")
+                eq_info = item.get("EarthquakeInfo", {})
+                origin_time = eq_info.get("OriginTime", "")
+                focal_depth = str(eq_info.get("FocalDepth", ""))
+                
+                epicenter = eq_info.get("Epicenter", {})
+                location = epicenter.get("Location", "")
+                
+                magnitude_info = eq_info.get("EarthquakeMagnitude", {})
+                magnitude = str(magnitude_info.get("MagnitudeValue", ""))
+                
+                # 解析震度 (Intensity)
+                shaking_areas = item.get("Intensity", {}).get("ShakingArea", [])
+                if not isinstance(shaking_areas, list): shaking_areas = [shaking_areas]
+                
+                # 整理震度資訊 (例如: "宜蘭縣4級, 花蓮縣3級...")
+                # 使用 dict 來去重，Key 為縣市名稱，Value 為該縣市最大震度資訊
+                county_map = {}
+
+                for area in shaking_areas:
+                    raw_county = area.get("CountyName", "")
+                    if not raw_county: continue
+                    
+                    # 清洗縣市名稱 (去除空白)
+                    county = raw_county.strip()
+                    
+                    intensity_str = area.get("AreaIntensity", "").strip()
+                    
+                    # 解析震度數值 (只取第一個數字)
+                    intensity_val = 0
+                    try:
+                        digits = ''.join(filter(str.isdigit, intensity_str))
+                        if digits:
+                            intensity_val = int(digits[0])
+                    except:
+                        pass
+                    
+                    # 如果該縣市未出現過，或新震度比較大，則更新
+                    if county not in county_map or intensity_val > county_map[county]["val"]:
+                        county_map[county] = {
+                            "county": county,
+                            "str": intensity_str,
+                            "val": intensity_val
+                        }
+                
+                # 轉回 list 並依照震度大小排序
+                sorted_intensities = list(county_map.values())
+                sorted_intensities.sort(key=lambda x: x["val"], reverse=True)
+                
+                # 建構完整清單 (不限制數量，因為使用者想要「所有」區域)
+                summary_parts = [f"{item['county']}{item['str']}" for item in sorted_intensities]
+                intensity_summary_str = ", ".join(summary_parts)
+                
+                # Generate AI Report
+                system_prompt = """
+                你現在是一位專業的新聞主播，負責插播即時地震快訊。
+                請根據接收到的地震資料，撰寫一段廣播稿。
+                
+                【撰寫要求】
+                1. **語氣緊急且嚴肅**，但保持冷靜。
+                2. 開頭直接播報：「氣象署發布顯著有感地震報告...」。
+                3. 清楚唸出：發生時間 (轉為口語，如剛才、今天晚間)、震央位置、芮氏規模。
+                4. **特別強調**：最大震度達到 3 級以上的縣市，若無則強調「各地最大震度」。
+                5. 提醒民眾保持冷靜，注意餘震。
+                6. 字數約 150-200 字。
+                """
+                
+                user_prompt = f"""
+                【地震資料】
+                編號: {eq_no}
+                時間: {origin_time}
+                規模: {magnitude}
+                深度: {focal_depth} 公里
+                位置: {location}
+                各地震度概要: {intensity_summary_str}
+                氣象署簡述: {report_content}
+                """
+                
+                ai_report = await generate_ai_text(system_prompt, user_prompt)
+                
+                # TTS
+                await send_to_tts_api(ai_report)
+                
+                # Save to DB
+                try:
+                    new_eq = models.EarthquakeAlert(
+                        earthquake_no=eq_no,
+                        report_type=item.get("ReportType", "地震報告"),
+                        origin_time=origin_time,
+                        location=location,
+                        magnitude=magnitude,
+                        depth=focal_depth,
+                        content=report_content,
+                        intensity_summary=intensity_summary_str,
+                        ai_report=ai_report,
+                        is_reported=True
+                    )
+                    db.add(new_eq)
+                    db.commit()
+                    new_eq_count += 1
+                except IntegrityError:
+                    db.rollback()
+                    print(f"Duplicate earthquake record ignored: {eq_no}")
+                except Exception as e:
+                    db.rollback()
+                    print(f"Error saving earthquake record {eq_no}: {e}")
+
+    except Exception as e:
+        print(f"Error processing earthquakes: {e}")
+        return {"status": "error", "message": str(e)}
+
+    return {"status": "success", "new_earthquakes_processed": new_eq_count}
 
 @app.get("/")
 def read_root():

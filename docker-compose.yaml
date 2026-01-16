@@ -1,20 +1,60 @@
 version: '3.8'
 
 services:
-  # backend:
-  #   build: ./backend
-  #   ports:
-  #     - "8000:8000"
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     - CWA_API_KEY=${VITE_CWA_API_KEY}
-  #     - GEMINI_API_KEY=${VITE_GEMINI_API_KEY}
-  #   volumes:
-  #     - ./backend:/app
+  # --- Backend Services ---
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=weather_user
+      - POSTGRES_PASSWORD=weather_password
+      - POSTGRES_DB=weather_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weather_user -d weather_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
+  weather-backend:
+    build: ./backend
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://weather_user:weather_password@db:5432/weather_db
+      - CWA_API_KEY=${VITE_CWA_API_KEY}
+      - GEMINI_API_KEY=${VITE_GEMINI_API_KEY}
+      - AI_PROVIDER=${AI_PROVIDER}
+      - AI_MODEL=${AI_MODEL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+  weather-scheduler:
+    build: ./backend
+    restart: always
+    command: ["python", "scheduler.py"]
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - weather-backend
+
+  # --- Frontend Services ---
   weather-app:
     build: .
+    restart: always
     ports:
       - "5175:5175"
     volumes:
@@ -23,4 +63,9 @@ services:
     env_file:
       - .env
     # Linux/Mac 上可能需要這個來避免權限問題，Windows 上通常不需要，但保留無妨
-    user: "node" 
+    user: "node"
+    depends_on:
+      - weather-backend
+
+volumes:
+  postgres_data:
