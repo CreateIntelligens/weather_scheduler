@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { CloudSun, RefreshCw, Clock, MapPin, Thermometer, Umbrella, Bot, AlertTriangle, Activity, Database, FileText, X, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 
-const BACKEND_URL = "http://localhost:8000";
+// 動態取得後端位址 (假設後端都在同一台機器的 8000 port)
+const BACKEND_URL = `http://${window.location.hostname}:8000`;
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('live'); // live, db
@@ -430,6 +431,7 @@ function DataTable({ title, icon: Icon, iconColor, apiUrl, renderRow, headers })
     const cacheBuster = `&t=${Date.now()}`;
     
     try {
+      // Use the global BACKEND_URL
       const res = await fetch(`${BACKEND_URL}${apiUrl}?limit=${LIMIT}&skip=${skip}${q}${cacheBuster}`);
       const json = await res.json();
       setData(json);
