@@ -49,6 +49,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 TTS_API_URL = os.getenv("TTS_API_URL", "http://127.0.0.1:5456/api/stream-speak")
 TTS_ENGINE = os.getenv("TTS_ENGINE", "indextts")
+OVERVIEW_FALLBACK_URL = os.getenv(
+    "OVERVIEW_FALLBACK_URL",
+    "https://cwaopendata.s3.ap-northeast-1.amazonaws.com/Forecast/F-C0032-031.FW50"
+)
 
 TARGET_CITIES = [
     '基隆市', '臺北市', '新北市', '桃園市', '新竹市', '新竹縣', '苗栗縣', '臺中市',
@@ -126,6 +130,84 @@ def parse_date_range(start_date: Optional[str], end_date: Optional[str]):
 
     return start_dt, end_dt
 
+def decode_cwa_overview_text(raw_bytes: bytes) -> str:
+    """CWA 小幫手文字檔目前為 Big5/CP950 編碼。"""
+    for encoding in ("cp950", "big5", "utf-8"):
+        try:
+            return raw_bytes.decode(encoding).strip()
+        except UnicodeDecodeError:
+            continue
+    return raw_bytes.decode("latin1", errors="ignore").strip()
+
+def clean_overview_text(raw_text: str) -> str:
+    """只做最小清洗：去除明顯噪音，不假設固定段落結構。"""
+    text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("ht\ntps://", "https://")
+    lines = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped == "1":
+            continue
+        if stripped.startswith("https://") or stripped.startswith("http://"):
+            continue
+        lines.append(line.rstrip())
+
+    cleaned = "\n".join(lines)
+    while "\n\n\n" in cleaned:
+        cleaned = cleaned.replace("\n\n\n", "\n\n")
+    return cleaned.strip()
+
+def extract_overview_publish_time(overview: str) -> str:
+    for line in overview.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("發布時間："):
+            return stripped.replace("發布時間：", "", 1).strip()
+    return "未提供"
+
+def build_weather_prompt(overview: str, cities_summary: str, current_time: str) -> tuple[str, str]:
+    system_prompt = """
+    你現在是一位專業且保守的氣象播報員。請根據提供的官方概要與縣市預報資料，整理一段整點天氣重點。
+
+    【嚴格要求】
+    1. **絕對不要**使用寒暄語或開場白。
+    2. **優先以官方概要內容為主**，22 縣市資料只用來補充區域差異、溫度與降雨機率。
+    3. 若官方概要沒有提到特定天氣系統，**禁止自行推測**或補上「東北季風、鋒面、太平洋高壓、華南雲雨區」等說法。
+    4. 若官方概要與縣市資料看起來有些微差異，請以官方概要的整體判斷為主。
+    5. 你會同時收到「目前播報時間」與「官方概要發布時間」，請以**目前播報時間**為基準理解「今天、今晚、晚起、明天」等相對時間。
+    6. 只要使用相對日期詞，**一定要帶上日期**，例如「今（7）日」、「明（8）日晚上」；禁止單獨出現「今天、今日、明天、今晚」等沒有日期的寫法。
+    7. 請整理成「全台概況 -> 降雨較明顯區域 -> 溫度/外出提醒」的順序。
+    8. 建議內容要保守、實用，不要把資料沒有提供的資訊寫進去。
+    9. 空氣品質、網址等非主要天氣資訊可忽略。
+    10. 若颱風資訊明確表示距離臺灣遙遠或對天氣無直接影響，請不要當作播報主重點。
+    11. 字數約 100-150 字。
+    """
+
+    if overview:
+        overview_publish_time = extract_overview_publish_time(overview)
+        user_content = (
+            f"【目前播報時間】\n{current_time}\n\n"
+            f"【官方概要發布時間】\n{overview_publish_time}\n\n"
+            f"【官方概要】\n{overview}\n\n"
+            f"【22縣市預報資料】\n{cities_summary}"
+        )
+    else:
+        system_prompt = """
+        你現在是一位專業且保守的氣象播報員。請根據提供的縣市預報資料，整理一段整點天氣重點。
+
+        【嚴格要求】
+        1. **絕對不要**使用寒暄語或開場白。
+        2. 只可根據提供的資料描述天氣現象、降雨機率與溫度差異。
+        3. **禁止自行推測**天氣系統成因；不要使用「東北季風、鋒面、太平洋高壓、華南雲雨區」等說法。
+        4. 你會收到目前播報時間，請以該時間為基準整理接下來的提醒。
+        5. 只要使用相對日期詞，**一定要帶上日期**，例如「今（7）日」、「明（8）日晚上」；禁止單獨出現「今天、今日、明天、今晚」等沒有日期的寫法。
+        6. 請整理成「全台概況 -> 降雨較明顯區域 -> 溫度/外出提醒」的順序。
+        7. 建議內容要保守、實用，不要把資料沒有提供的資訊寫進去。
+        8. 字數約 80-120 字。
+        """
+        user_content = f"【目前播報時間】\n{current_time}\n\n【22縣市預報資料】\n{cities_summary}"
+
+    return system_prompt, user_content
+
 async def send_to_tts_api(text: str):
     """將文字發送到 TTS 服務"""
     print(f"[{datetime.now()}] Sending to TTS API...")
@@ -201,8 +283,16 @@ async def generate_ai_text(system_prompt: str, user_content: str) -> str:
             return "AI 分析暫時無法使用。"
 
 async def fetch_overview(client: httpx.AsyncClient) -> str:
-    """(保留) 抓取全臺天氣概況"""
-    return ""
+    """抓取全臺天氣小幫手概要，直接讀取目前可用的 ProductURL。"""
+    try:
+        overview_resp = await client.get(OVERVIEW_FALLBACK_URL, timeout=20.0)
+        overview_resp.raise_for_status()
+        overview_text = clean_overview_text(decode_cwa_overview_text(overview_resp.content))
+        print(f"Fetched overview text length: {len(overview_text)}")
+        return overview_text
+    except Exception as e:
+        print(f"Error fetching overview text: {e}")
+        return ""
 
 async def fetch_cities_forecast(client: httpx.AsyncClient) -> List[CityWeather]:
     """抓取各縣市預報 (F-C0032-001)"""
@@ -269,23 +359,12 @@ async def get_weather(refresh: bool = False, db: Session = Depends(get_db)):
     # --- 2. 抓取新資料並生成 AI 報告 (只有 refresh=True 或 DB 為空時執行) ---
     print("Fetching fresh weather data and generating AI report...")
     async with httpx.AsyncClient() as client:
+        current_time = now.strftime("%Y-%m-%d %H:%M:%S")
         overview = await fetch_overview(client)
         cities = await fetch_cities_forecast(client)
         
-        # 一般天氣預報的 Prompt
         cities_summary = "\n".join([f"{c.name}: {c.wx}, {c.minT}-{c.maxT}度, 降雨{c.pop}%" for c in cities])
-        system_prompt = """
-        你現在是一位專業且精準的氣象分析師。請根據以下資料撰寫最新的整點氣象快訊。
-    
-        【嚴格要求】:
-        1. **絕對不要**使用任何寒暄語或開場白。
-        2. **直接切入**天氣重點。
-        3. 語氣要像即時通訊軟體中的「重點整理」一樣，簡潔有力但保有專業度。
-        4. 請根據數據分析目前是受什麼天氣系統（如東北季風、鋒面）影響。
-        5. 針對接下來 1-3 小時做簡單的穿著或攜帶雨具建議。
-        6. 字數約 100-150 字。
-        """
-        user_content = f"【輸入資料】:\n{cities_summary}"
+        system_prompt, user_content = build_weather_prompt(overview, cities_summary, current_time)
         
         ai_report = await generate_ai_text(system_prompt, user_content)
         
@@ -352,22 +431,12 @@ async def manual_weather_broadcast(db: Session = Depends(get_db)):
     """
     print(f"[{datetime.now()}] Manually triggering weather broadcast...")
     async with httpx.AsyncClient() as client:
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         overview = await fetch_overview(client)
         cities = await fetch_cities_forecast(client)
         
         cities_summary = "\n".join([f"{c.name}: {c.wx}, {c.minT}-{c.maxT}度, 降雨{c.pop}%" for c in cities])
-        system_prompt = """
-        你現在是一位專業且精準的氣象分析師。請根據以下資料撰寫最新的整點氣象快訊。
-    
-        【嚴格要求】:
-        1. **絕對不要**使用任何寒暄語或開場白。
-        2. **直接切入**天氣重點。
-        3. 語氣要像即時通訊軟體中的「重點整理」一樣，簡潔有力但保有專業度。
-        4. 請根據數據分析目前是受什麼天氣系統（如東北季風、鋒面）影響。
-        5. 針對接下來 1-3 小時做簡單的穿著或攜帶雨具建議。
-        6. 字數約 100-150 字。
-        """
-        user_content = f"【最新觀測資料】:\n{cities_summary}"
+        system_prompt, user_content = build_weather_prompt(overview, cities_summary, current_time)
         
         ai_report = await generate_ai_text(system_prompt, user_content)
         
@@ -455,6 +524,7 @@ async def re_report_warning(warning_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="找不到該特報 ID")
 
     print(f"[{datetime.now()}] Manually re-reporting warning: {warning.title}")
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     system_prompt = """
     你現在是一位專業的氣象主播，負責即時插播氣象特報。
@@ -462,11 +532,16 @@ async def re_report_warning(warning_id: int, db: Session = Depends(get_db)):
     1. **絕對不要**使用任何寒暄語或開場白。
     2. 開頭直接切入重點。
     3. **清楚區分**「發布時間」與「實際生效時間」；若特報是今天發布、明天生效，必須明確說「明天」或具體時段，不能說成今天整天。
-    4. 強調受影響地區。
-    5. 簡潔扼要，約 100-150 字。
+    4. 只要使用相對日期詞，**一定要帶上日期**，例如「今（7）日」、「明（8）日上午」；禁止單獨出現「今天、今日、明天、今晚」等沒有日期的寫法。
+    5. 若要描述發布時間，應寫成像「氣象署今（7）日上午發布特報」這樣的格式。
+    6. 強調受影響地區。
+    7. 簡潔扼要，約 100-150 字。
     """
     
     user_prompt = f"""
+    【目前播報時間】
+    {current_time}
+
     【特報資料】
     標題: {warning.title}
     發布時間: {warning.issue_time}
@@ -556,6 +631,7 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
                 print(f"New Warning Found: {dataset_desc}")
                 
                 # 生成 AI 廣播稿
+                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 system_prompt = """
                 你現在是一位專業的氣象主播，負責即時插播氣象特報。
                 請根據接收到的氣象局特報資料，撰寫一段廣播稿。
@@ -564,12 +640,17 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
                 1. 開頭直接切入重點 (如「氣象署發布...」)。
                 2. 口語化改寫：去除公文式標號，但**必須準確描述實際生效時段**。
                 3. **清楚區分**「發布時間」與「實際生效時間」；若今天發布、明天生效，必須說成「明天上午至晚上」或對應時段，不能講成今天整天。
-                4. 強調受影響區域：清楚唸出受影響的縣市。
-                5. 簡潔扼要：保留危險原因與防範措施，約 100-150 字。
-                6. 語氣：急切、權威、清晰。
+                4. 只要使用相對日期詞，**一定要帶上日期**，例如「今（7）日」、「明（8）日上午」；禁止單獨出現「今天、今日、明天、今晚」等沒有日期的寫法。
+                5. 若要描述發布時間，應寫成像「氣象署今（7）日上午發布特報」這樣的格式。
+                6. 強調受影響區域：清楚唸出受影響的縣市。
+                7. 簡潔扼要：保留危險原因與防範措施，約 100-150 字。
+                8. 語氣：急切、權威、清晰。
                 """
                 
                 user_prompt = f"""
+                【目前播報時間】
+                {current_time}
+
                 【特報資料】
                 標題: {dataset_desc}
                 發布時間: {issue_time}
