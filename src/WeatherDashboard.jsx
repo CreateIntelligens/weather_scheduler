@@ -4,6 +4,10 @@ import { CloudSun, RefreshCw, Clock, MapPin, Thermometer, Umbrella, Bot, AlertTr
 // 使用 Vite Proxy (在 vite.config.js 設定轉發 /api -> weather-backend:8000)
 // 這樣瀏覽器只需要訪問 5175，不需要直接連 8000
 const BACKEND_URL = '';
+const TABLE_CELL = 'px-5 py-4 align-top';
+const TABLE_TIME_CELL = `${TABLE_CELL} text-xs text-slate-400 whitespace-nowrap tabular-nums`;
+const TABLE_ID_CELL = `${TABLE_CELL} w-20 whitespace-nowrap font-mono text-xs text-slate-400`;
+const TABLE_ACTION_CELL = `${TABLE_CELL} w-24 whitespace-nowrap`;
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('live'); // live, db
@@ -259,25 +263,26 @@ export default function App() {
               icon={CloudSun}
               iconColor="text-blue-500"
               apiUrl="/api/forecasts"
+              columnClasses={['w-20', 'w-48', 'min-w-[28rem]', 'w-48']}
               renderRow={(f) => (
-                <tr key={f.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-slate-400">#{f.id}</td>
-                  <td className="px-4 py-3 text-slate-800 font-medium">
+                <tr key={f.id} className="hover:bg-slate-50/80">
+                  <td className={TABLE_ID_CELL}>#{f.id}</td>
+                  <td className={TABLE_TIME_CELL}>
                     {new Date(f.report_time).toLocaleString()}
                   </td>
                   <td 
-                    className="px-4 py-3 text-slate-600 max-w-md truncate cursor-pointer hover:text-indigo-600 hover:underline decoration-dotted"
+                    className={`${TABLE_CELL} max-w-xl truncate text-sm leading-6 text-slate-600 cursor-pointer hover:text-indigo-600 hover:underline decoration-dotted`}
                     onClick={() => openModal(`天氣預報 #${f.id}`, f.ai_report, f.overview)}
                     title="點擊查看完整報告"
                   >
                     {f.ai_report || "無 AI 報告"}
                   </td>
-                  <td className="px-4 py-3 text-right text-slate-400 text-xs">
+                  <td className={`${TABLE_TIME_CELL} text-right`}>
                     {new Date(f.created_at).toLocaleString()}
                   </td>
                 </tr>
               )}
-              headers={['ID', '報告時間', 'AI 摘要 (前 50 字)', '建立時間']}
+              headers={['ID', '報告時間', 'AI 摘要 (前 50 字)', '播報時間']}
             />
 
             {/* 2. Warnings History */}
@@ -286,25 +291,26 @@ export default function App() {
               icon={AlertTriangle}
               iconColor="text-orange-500"
               apiUrl="/api/warnings"
+              columnClasses={['w-20', 'w-72', 'w-48', 'w-64', 'min-w-[22rem]', 'w-48', 'w-24']}
               renderRow={(w) => (
-                <tr key={w.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-slate-400">#{w.id}</td>
-                  <td className="px-4 py-3 font-bold text-orange-600">{w.title}</td>
-                  <td className="px-4 py-3">{w.issue_time}</td>
-                  <td className="px-4 py-3 max-w-xs truncate" title={w.affected_areas}>
+                <tr key={w.id} className="hover:bg-slate-50/80">
+                  <td className={TABLE_ID_CELL}>#{w.id}</td>
+                  <td className={`${TABLE_CELL} text-sm font-semibold text-orange-600 leading-6`}>{w.title}</td>
+                  <td className={TABLE_TIME_CELL}>{new Date(w.issue_time).toLocaleString()}</td>
+                  <td className={`${TABLE_CELL} max-w-sm truncate text-sm leading-6 text-slate-600`} title={w.affected_areas}>
                     {w.affected_areas}
                   </td>
                   <td 
-                    className="px-4 py-3 max-w-xs truncate text-slate-500 cursor-pointer hover:text-indigo-600 hover:underline decoration-dotted"
+                    className={`${TABLE_CELL} max-w-lg truncate text-sm leading-6 text-slate-500 cursor-pointer hover:text-indigo-600 hover:underline decoration-dotted`}
                     onClick={() => openModal(`特報: ${w.title}`, w.ai_report, w.content)}
                     title="點擊查看完整報告"
                   >
                     {w.ai_report || "尚未生成"}
                   </td>
-                  <td className="px-4 py-3 text-slate-400 text-xs">
+                  <td className={TABLE_TIME_CELL}>
                     {new Date(w.created_at).toLocaleString()}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className={TABLE_ACTION_CELL}>
                      <button 
                        onClick={async () => {
                          if(confirm('確定要重新生成並播報此特報嗎？')) {
@@ -312,14 +318,14 @@ export default function App() {
                            alert("已送出重播請求，請稍後點擊整理按鈕。");
                          }
                        }}
-                       className="text-indigo-600 hover:text-indigo-800 text-xs font-medium border border-indigo-200 px-2 py-1 rounded"
+                       className="text-indigo-600 hover:text-indigo-800 text-xs font-medium border border-indigo-200 px-2.5 py-1.5 rounded-md bg-white"
                      >
                        重播
                      </button>
                   </td>
                 </tr>
               )}
-              headers={['ID', '標題', '發布時間', '受影響地區', 'AI 報告', '建立時間', '操作']}
+              headers={['ID', '標題', '發布時間', '受影響地區', 'AI 報告', '播報時間', '操作']}
             />
 
             {/* 3. Earthquakes History */}
@@ -328,25 +334,26 @@ export default function App() {
               icon={Activity}
               iconColor="text-red-500"
               apiUrl="/api/earthquakes"
+              columnClasses={['w-24', 'w-48', 'w-64', 'min-w-[22rem]', 'w-48', 'w-24']}
               renderRow={(eq) => (
-                <tr key={eq.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-slate-400">#{eq.earthquake_no}</td>
-                  <td className="px-4 py-3 text-slate-800">{eq.origin_time}</td>
-                  <td className="px-4 py-3">
+                <tr key={eq.id} className="hover:bg-slate-50/80">
+                  <td className={TABLE_ID_CELL}>#{eq.earthquake_no}</td>
+                  <td className={TABLE_TIME_CELL}>{new Date(eq.origin_time).toLocaleString()}</td>
+                  <td className={TABLE_CELL}>
                     <div className="font-bold text-red-600">M {eq.magnitude}</div>
-                    <div className="text-xs text-slate-500">{eq.location}</div>
+                    <div className="text-xs leading-5 text-slate-500 mt-1">{eq.location}</div>
                   </td>
                   <td 
-                    className="px-4 py-3 max-w-xs truncate text-slate-500 cursor-pointer hover:text-indigo-600 hover:underline decoration-dotted"
+                    className={`${TABLE_CELL} max-w-lg truncate text-sm leading-6 text-slate-500 cursor-pointer hover:text-indigo-600 hover:underline decoration-dotted`}
                     onClick={() => openModal(`地震報告 #${eq.earthquake_no}`, eq.ai_report, `【氣象署簡述】:\n${eq.content}\n\n【各縣市震度摘要】:\n${eq.intensity_summary}`)}
                     title="點擊查看完整報告"
                   >
                     {eq.ai_report || "尚未生成"}
                   </td>
-                  <td className="px-4 py-3 text-slate-400 text-xs">
+                  <td className={TABLE_TIME_CELL}>
                     {new Date(eq.created_at).toLocaleString()}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className={TABLE_ACTION_CELL}>
                      <button 
                        onClick={async () => {
                          if(confirm('確定要重新生成並播報此地震資訊嗎？')) {
@@ -354,14 +361,14 @@ export default function App() {
                            alert("已送出重播請求，請稍後點擊整理按鈕。");
                          }
                        }}
-                       className="text-indigo-600 hover:text-indigo-800 text-xs font-medium border border-indigo-200 px-2 py-1 rounded"
+                       className="text-indigo-600 hover:text-indigo-800 text-xs font-medium border border-indigo-200 px-2.5 py-1.5 rounded-md bg-white"
                      >
                        重播
                      </button>
                   </td>
                 </tr>
               )}
-              headers={['編號', '時間', '規模/位置', 'AI 報告', '建立時間', '操作']}
+              headers={['編號', '發生時間', '規模/位置', 'AI 報告', '播報時間', '操作']}
             />
 
           </div>
@@ -418,7 +425,7 @@ export default function App() {
 }
 
 // Reusable DataTable Component
-function DataTable({ title, icon: Icon, iconColor, apiUrl, renderRow, headers }) {
+function DataTable({ title, icon: Icon, iconColor, apiUrl, renderRow, headers, columnClasses = [] }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
@@ -492,13 +499,16 @@ function DataTable({ title, icon: Icon, iconColor, apiUrl, renderRow, headers })
                無資料
              </div>
           ) : (
-            <table className="w-full text-sm text-left">
-              <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+            <table className="min-w-full text-left border-separate border-spacing-0">
+              <colgroup>
+                {headers.map((_, i) => <col key={i} className={columnClasses[i] || ''} />)}
+              </colgroup>
+              <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
                 <tr>
-                  {headers.map((h, i) => <th key={i} className="px-4 py-3">{h}</th>)}
+                  {headers.map((h, i) => <th key={i} className="px-5 py-3.5 text-xs font-semibold tracking-wide whitespace-nowrap">{h}</th>)}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="text-sm divide-y divide-slate-100">
                 {data.map(item => renderRow(item))}
               </tbody>
             </table>
