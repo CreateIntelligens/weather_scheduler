@@ -7,7 +7,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, cast, String
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 
@@ -99,6 +99,20 @@ class ForecastRecord(BaseModel):
         orm_mode = True
 
 # --- Helper Functions ---
+
+def parse_date_range(start_date: Optional[str], end_date: Optional[str]):
+    start_dt = None
+    end_dt = None
+
+    try:
+        if start_date:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        if end_date:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式錯誤，請使用 YYYY-MM-DD")
+
+    return start_dt, end_dt
 
 async def send_to_tts_api(text: str):
     """將文字發送到 TTS 服務"""
@@ -284,19 +298,29 @@ async def get_weather(refresh: bool = False, db: Session = Depends(get_db)):
         return response_data
 
 @app.get("/api/forecasts", response_model=List[ForecastRecord])
-def get_forecasts(skip: int = 0, limit: int = 10, q: Optional[str] = None, db: Session = Depends(get_db)):
+def get_forecasts(
+    skip: int = 0,
+    limit: int = 10,
+    q: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
     query = db.query(models.WeatherForecast)
+    start_dt, end_dt = parse_date_range(start_date, end_date)
     
     if q:
-        # Search in AI report or Overview
-        # Note: SQLite/Postgres date searching via string is tricky, let's stick to text content first
-        # For date, user can type "2026-01-14" and we can try to match it if we cast to string, 
-        # but simpler to just search text fields for now.
         search = f"%{q}%"
         query = query.filter(or_(
             models.WeatherForecast.ai_report.ilike(search),
-            models.WeatherForecast.overview.ilike(search)
+            models.WeatherForecast.overview.ilike(search),
+            models.WeatherForecast.cities_data.ilike(search)
         ))
+
+    if start_dt:
+        query = query.filter(models.WeatherForecast.report_time >= start_dt)
+    if end_dt:
+        query = query.filter(models.WeatherForecast.report_time < end_dt)
     
     forecasts = query.order_by(models.WeatherForecast.created_at.desc()).offset(skip).limit(limit).all()
     return forecasts
@@ -378,8 +402,16 @@ async def get_city_weather(city_name: str):
 
 # 2. 新增：查詢歷史特報
 @app.get("/api/warnings", response_model=List[WarningRecord])
-def get_warnings(skip: int = 0, limit: int = 10, q: Optional[str] = None, db: Session = Depends(get_db)):
+def get_warnings(
+    skip: int = 0,
+    limit: int = 10,
+    q: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
     query = db.query(models.WeatherWarning)
+    start_dt, end_dt = parse_date_range(start_date, end_date)
     
     if q:
         search = f"%{q}%"
@@ -387,8 +419,13 @@ def get_warnings(skip: int = 0, limit: int = 10, q: Optional[str] = None, db: Se
             models.WeatherWarning.title.ilike(search),
             models.WeatherWarning.content.ilike(search),
             models.WeatherWarning.affected_areas.ilike(search),
-            models.WeatherWarning.issue_time.ilike(search) # Date search via string match
+            models.WeatherWarning.ai_report.ilike(search)
         ))
+
+    if start_dt:
+        query = query.filter(models.WeatherWarning.issue_time >= start_dt.strftime("%Y-%m-%d 00:00:00"))
+    if end_dt:
+        query = query.filter(models.WeatherWarning.issue_time < end_dt.strftime("%Y-%m-%d 00:00:00"))
 
     warnings = query.order_by(models.WeatherWarning.issue_time.desc()).offset(skip).limit(limit).all()
     return warnings
@@ -553,16 +590,32 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
 # 4. 新增：地震相關 Endpoints
 
 @app.get("/api/earthquakes", response_model=List[EarthquakeRecord])
-def get_earthquakes(skip: int = 0, limit: int = 10, q: Optional[str] = None, db: Session = Depends(get_db)):
+def get_earthquakes(
+    skip: int = 0,
+    limit: int = 10,
+    q: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
     query = db.query(models.EarthquakeAlert)
+    start_dt, end_dt = parse_date_range(start_date, end_date)
     
     if q:
         search = f"%{q}%"
         query = query.filter(or_(
+            cast(models.EarthquakeAlert.earthquake_no, String).ilike(search),
             models.EarthquakeAlert.location.ilike(search),
+            models.EarthquakeAlert.magnitude.ilike(search),
             models.EarthquakeAlert.content.ilike(search),
-            models.EarthquakeAlert.origin_time.ilike(search)
+            models.EarthquakeAlert.intensity_summary.ilike(search),
+            models.EarthquakeAlert.ai_report.ilike(search)
         ))
+
+    if start_dt:
+        query = query.filter(models.EarthquakeAlert.origin_time >= start_dt.strftime("%Y-%m-%d 00:00:00"))
+    if end_dt:
+        query = query.filter(models.EarthquakeAlert.origin_time < end_dt.strftime("%Y-%m-%d 00:00:00"))
 
     eqs = query.order_by(models.EarthquakeAlert.origin_time.desc()).offset(skip).limit(limit).all()
     return eqs

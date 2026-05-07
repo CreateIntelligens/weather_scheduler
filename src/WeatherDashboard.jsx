@@ -430,17 +430,26 @@ function DataTable({ title, icon: Icon, iconColor, apiUrl, renderRow, headers, c
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const LIMIT = 10;
 
-  const fetchData = async () => {
+  const fetchData = async (
+    nextPage = page,
+    nextSearchQuery = searchQuery,
+    nextStartDate = startDate,
+    nextEndDate = endDate
+  ) => {
     setLoading(true);
-    const skip = page * LIMIT;
-    const q = searchQuery ? `&q=${encodeURIComponent(searchQuery)}` : '';
+    const skip = nextPage * LIMIT;
+    const q = nextSearchQuery ? `&q=${encodeURIComponent(nextSearchQuery)}` : '';
+    const start = nextStartDate ? `&start_date=${encodeURIComponent(nextStartDate)}` : '';
+    const end = nextEndDate ? `&end_date=${encodeURIComponent(nextEndDate)}` : '';
     const cacheBuster = `&t=${Date.now()}`;
     
     try {
       // Use the global BACKEND_URL
-      const res = await fetch(`${BACKEND_URL}${apiUrl}?limit=${LIMIT}&skip=${skip}${q}${cacheBuster}`);
+      const res = await fetch(`${BACKEND_URL}${apiUrl}?limit=${LIMIT}&skip=${skip}${q}${start}${end}${cacheBuster}`);
       const json = await res.json();
       setData(json);
     } catch (e) {
@@ -451,12 +460,22 @@ function DataTable({ title, icon: Icon, iconColor, apiUrl, renderRow, headers, c
   };
 
   useEffect(() => {
-    fetchData();
+    fetchData(page, searchQuery, startDate, endDate);
   }, [page]); // Re-fetch on page change
 
   const handleSearch = () => {
-    setPage(0); // Reset to page 0 on search
-    fetchData();
+    const nextPage = 0;
+    setPage(nextPage);
+    fetchData(nextPage, searchQuery, startDate, endDate);
+  };
+
+  const handleClearFilters = () => {
+    const nextPage = 0;
+    setSearchQuery('');
+    setStartDate('');
+    setEndDate('');
+    setPage(nextPage);
+    fetchData(nextPage, '', '', '');
   };
 
   return (
@@ -466,16 +485,33 @@ function DataTable({ title, icon: Icon, iconColor, apiUrl, renderRow, headers, c
           <Icon className={iconColor} /> {title}
         </h3>
         
-        <div className="flex gap-2 w-full md:w-auto">
-          <div className="relative flex-1 md:w-64">
+        <div className="flex flex-col md:flex-row gap-2 w-full md:w-auto md:items-center">
+          <div className="relative flex-1 md:w-72">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <input 
               type="text"
-              placeholder="搜尋..."
+              placeholder="搜尋關鍵字，例如 臺北、強風、6.1"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
               className="w-full pl-9 pr-4 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              aria-label="開始日期"
+            />
+            <span className="text-xs text-slate-400">到</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              aria-label="結束日期"
             />
           </div>
           <button 
@@ -483,6 +519,12 @@ function DataTable({ title, icon: Icon, iconColor, apiUrl, renderRow, headers, c
              className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg text-sm transition-colors"
            >
              搜尋
+           </button>
+          <button 
+             onClick={handleClearFilters}
+             className="bg-white hover:bg-slate-50 text-slate-500 px-3 py-1.5 rounded-lg text-sm transition-colors border border-slate-200"
+           >
+             清除
            </button>
         </div>
       </div>
