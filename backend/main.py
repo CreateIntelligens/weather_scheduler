@@ -7,7 +7,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, cast, String
+from sqlalchemy import or_, cast, String, text
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 
@@ -17,6 +17,15 @@ import models
 
 # 初始化資料庫 Table
 models.Base.metadata.create_all(bind=engine)
+
+def ensure_warning_columns():
+    """補齊舊資料表缺少的欄位，避免沒有 migration 工具時啟動失敗。"""
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE weather_warnings ADD COLUMN IF NOT EXISTS valid_time_start VARCHAR"))
+        conn.execute(text("ALTER TABLE weather_warnings ADD COLUMN IF NOT EXISTS valid_time_end VARCHAR"))
+        conn.execute(text("ALTER TABLE weather_warnings ADD COLUMN IF NOT EXISTS update_time VARCHAR"))
+
+ensure_warning_columns()
 
 load_dotenv()
 
@@ -65,6 +74,9 @@ class WarningRecord(BaseModel):
     id: int
     title: str
     issue_time: str
+    valid_time_start: Optional[str] = None
+    valid_time_end: Optional[str] = None
+    update_time: Optional[str] = None
     content: str
     affected_areas: str
     ai_report: Optional[str] = None
@@ -419,7 +431,9 @@ def get_warnings(
             models.WeatherWarning.title.ilike(search),
             models.WeatherWarning.content.ilike(search),
             models.WeatherWarning.affected_areas.ilike(search),
-            models.WeatherWarning.ai_report.ilike(search)
+            models.WeatherWarning.ai_report.ilike(search),
+            models.WeatherWarning.valid_time_start.ilike(search),
+            models.WeatherWarning.valid_time_end.ilike(search)
         ))
 
     if start_dt:
@@ -447,7 +461,7 @@ async def re_report_warning(warning_id: int, db: Session = Depends(get_db)):
     請根據接收到的氣象局特報資料，撰寫一段廣播稿。
     1. **絕對不要**使用任何寒暄語或開場白。
     2. 開頭直接切入重點。
-    3. 口語化改寫時間與內容。
+    3. **清楚區分**「發布時間」與「實際生效時間」；若特報是今天發布、明天生效，必須明確說「明天」或具體時段，不能說成今天整天。
     4. 強調受影響地區。
     5. 簡潔扼要，約 100-150 字。
     """
@@ -456,6 +470,9 @@ async def re_report_warning(warning_id: int, db: Session = Depends(get_db)):
     【特報資料】
     標題: {warning.title}
     發布時間: {warning.issue_time}
+    生效開始時間: {warning.valid_time_start or '未提供'}
+    生效結束時間: {warning.valid_time_end or '未提供'}
+    更新時間: {warning.update_time or '未提供'}
     受影響地區: {warning.affected_areas}
     內容全文: {warning.content}
     """
@@ -501,6 +518,10 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
                 dataset_info = record.get("datasetInfo", {})
                 dataset_desc = dataset_info.get("datasetDescription", "未分類特報") # Title
                 issue_time = dataset_info.get("issueTime", "")
+                valid_time = dataset_info.get("validTime", {})
+                valid_time_start = valid_time.get("startTime", "")
+                valid_time_end = valid_time.get("endTime", "")
+                update_time = dataset_info.get("update", "")
                 
                 # 取得內容與地區
                 contents = record.get("contents", {}).get("content", {})
@@ -541,16 +562,20 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
 
                 【撰寫要求】
                 1. 開頭直接切入重點 (如「氣象署發布...」)。
-                2. 口語化改寫：去除公文式標號，將時間改為自然口語 (如「今天上午」)。
-                3. 強調受影響區域：清楚唸出受影響的縣市。
-                4. 簡潔扼要：保留危險原因與防範措施，約 100-150 字。
-                5. 語氣：急切、權威、清晰。
+                2. 口語化改寫：去除公文式標號，但**必須準確描述實際生效時段**。
+                3. **清楚區分**「發布時間」與「實際生效時間」；若今天發布、明天生效，必須說成「明天上午至晚上」或對應時段，不能講成今天整天。
+                4. 強調受影響區域：清楚唸出受影響的縣市。
+                5. 簡潔扼要：保留危險原因與防範措施，約 100-150 字。
+                6. 語氣：急切、權威、清晰。
                 """
                 
                 user_prompt = f"""
                 【特報資料】
                 標題: {dataset_desc}
                 發布時間: {issue_time}
+                生效開始時間: {valid_time_start or '未提供'}
+                生效結束時間: {valid_time_end or '未提供'}
+                更新時間: {update_time or '未提供'}
                 受影響地區: {affected_areas_str}
                 內容全文: {content_text}
                 """
@@ -565,6 +590,9 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
                     new_warning = models.WeatherWarning(
                         dataset_id="W-C0033-002",
                         issue_time=issue_time,
+                        valid_time_start=valid_time_start,
+                        valid_time_end=valid_time_end,
+                        update_time=update_time,
                         title=dataset_desc,
                         content=content_text,
                         affected_areas=affected_areas_str,

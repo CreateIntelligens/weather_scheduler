@@ -291,11 +291,16 @@ export default function App() {
               icon={AlertTriangle}
               iconColor="text-orange-500"
               apiUrl="/api/warnings"
-              columnClasses={['w-20', 'w-72', 'w-48', 'w-64', 'min-w-[22rem]', 'w-48', 'w-24']}
+              columnClasses={['w-20', 'w-64', 'w-56', 'w-48', 'w-64', 'min-w-[22rem]', 'w-48', 'w-24']}
               renderRow={(w) => (
                 <tr key={w.id} className="hover:bg-slate-50/80">
                   <td className={TABLE_ID_CELL}>#{w.id}</td>
                   <td className={`${TABLE_CELL} text-sm font-semibold text-orange-600 leading-6`}>{w.title}</td>
+                  <td className={TABLE_TIME_CELL}>
+                    {w.valid_time_start && w.valid_time_end
+                      ? `${new Date(w.valid_time_start).toLocaleString()} - ${new Date(w.valid_time_end).toLocaleString()}`
+                      : '--'}
+                  </td>
                   <td className={TABLE_TIME_CELL}>{new Date(w.issue_time).toLocaleString()}</td>
                   <td className={`${TABLE_CELL} max-w-sm truncate text-sm leading-6 text-slate-600`} title={w.affected_areas}>
                     {w.affected_areas}
@@ -325,7 +330,7 @@ export default function App() {
                   </td>
                 </tr>
               )}
-              headers={['ID', '標題', '發布時間', '受影響地區', 'AI 報告', '播報時間', '操作']}
+              headers={['ID', '標題', '生效期間', '發布時間', '受影響地區', 'AI 報告', '播報時間', '操作']}
             />
 
             {/* 3. Earthquakes History */}
