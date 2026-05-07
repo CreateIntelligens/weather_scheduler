@@ -1,16 +1,20 @@
+import os
 import time
 import httpx
 from apscheduler.schedulers.blocking import BlockingScheduler
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Backend 內部 URL
-BACKEND_BASE_URL = "http://weather-backend:8000"
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://weather-backend:8000")
 UPDATE_WEATHER_URL = f"{BACKEND_BASE_URL}/api/weather?refresh=true"
 CHECK_WARNINGS_URL = f"{BACKEND_BASE_URL}/api/cron/check-warnings"
 CHECK_EARTHQUAKES_URL = f"{BACKEND_BASE_URL}/api/cron/check-earthquakes"
 
-TTS_API_URL = "http://10.9.0.35:5456/api/stream-speak"
-TTS_ENGINE = "indextts"
+TTS_API_URL = os.getenv("TTS_API_URL", "http://127.0.0.1:5456/api/stream-speak")
+TTS_ENGINE = os.getenv("TTS_ENGINE", "indextts")
 
 def send_to_tts_api(text):
     """(Legacy) 直接發送 TTS，現主要由 Backend 處理，但在一般天氣更新時仍保留此邏輯"""

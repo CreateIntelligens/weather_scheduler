@@ -59,8 +59,21 @@ AI_MODEL=gemini-1.5-flash
 OPENAI_API_KEY=
 GROQ_API_KEY=
 
-# 資料庫設定 (通常不需修改，除非您改了 docker-compose)
-DATABASE_URL=postgresql://weather_user:weather_password@db:5432/weather_db
+# 資料庫設定
+POSTGRES_USER=weather_user
+POSTGRES_PASSWORD=change_me
+POSTGRES_DB=weather_db
+DATABASE_URL=postgresql://weather_user:change_me@db:5432/weather_db
+
+# 內部服務設定
+BACKEND_BASE_URL=http://weather-backend:8000
+TTS_API_URL=http://127.0.0.1:5456/api/stream-speak
+TTS_ENGINE=indextts
+
+# 前端開發伺服器
+VITE_PORT=5175
+VITE_ALLOWED_HOSTS=
+VITE_API_PROXY_TARGET=http://weather-backend:8000
 ```
 
 ### 2. 啟動服務 (三種模式)

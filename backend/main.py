@@ -38,8 +38,8 @@ AI_MODEL = os.getenv("AI_MODEL", "gemini-1.5-flash")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-TTS_API_URL = "http://10.9.0.35:5456/api/stream-speak"
-TTS_ENGINE = "indextts"
+TTS_API_URL = os.getenv("TTS_API_URL", "http://127.0.0.1:5456/api/stream-speak")
+TTS_ENGINE = os.getenv("TTS_ENGINE", "indextts")
 
 TARGET_CITIES = [
     '基隆市', '臺北市', '新北市', '桃園市', '新竹市', '新竹縣', '苗栗縣', '臺中市',
@@ -257,7 +257,7 @@ async def get_weather(refresh: bool = False, db: Session = Depends(get_db)):
         3. 語氣要像即時通訊軟體中的「重點整理」一樣，簡潔有力但保有專業度。
         4. 請根據數據分析目前是受什麼天氣系統（如東北季風、鋒面）影響。
         5. 針對接下來 1-3 小時做簡單的穿著或攜帶雨具建議。
-        6. 字數約 200-250 字。
+        6. 字數約 100-150 字。
         """
         user_content = f"【輸入資料】:\n{cities_summary}"
         
@@ -329,7 +329,7 @@ async def manual_weather_broadcast(db: Session = Depends(get_db)):
         3. 語氣要像即時通訊軟體中的「重點整理」一樣，簡潔有力但保有專業度。
         4. 請根據數據分析目前是受什麼天氣系統（如東北季風、鋒面）影響。
         5. 針對接下來 1-3 小時做簡單的穿著或攜帶雨具建議。
-        6. 字數約 200-250 字。
+        6. 字數約 100-150 字。
         """
         user_content = f"【最新觀測資料】:\n{cities_summary}"
         
@@ -412,7 +412,7 @@ async def re_report_warning(warning_id: int, db: Session = Depends(get_db)):
     2. 開頭直接切入重點。
     3. 口語化改寫時間與內容。
     4. 強調受影響地區。
-    5. 簡潔扼要，約 200-250 字。
+    5. 簡潔扼要，約 100-150 字。
     """
     
     user_prompt = f"""
@@ -588,7 +588,7 @@ async def re_report_earthquake(eq_id: int, db: Session = Depends(get_db)):
     3. 清楚唸出：發生時間 (轉為口語，如剛才、今天晚間)、震央位置、芮氏規模。
     4. **特別強調**：最大震度達到 3 級以上的縣市，若無則強調「最大震度 x 級」。
     5. 提醒民眾保持冷靜，注意餘震。
-    6. 字數約 150-200 字。
+    6. 字數約 100-150 字。
     """
     
     user_prompt = f"""
@@ -709,7 +709,7 @@ async def check_and_process_earthquakes(db: Session = Depends(get_db)):
                 3. 清楚唸出：發生時間 (轉為口語，如剛才、今天晚間)、震央位置、芮氏規模。
                 4. **特別強調**：最大震度達到 3 級以上的縣市，若無則強調「各地最大震度」。
                 5. 提醒民眾保持冷靜，注意餘震。
-                6. 字數約 150-200 字。
+                6. 字數約 100-150 字。
                 """
                 
                 user_prompt = f"""

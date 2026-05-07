@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { CloudSun, RefreshCw, Clock, MapPin, Thermometer, Umbrella, Bot, AlertTriangle, Activity, Database, FileText, X, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 
-// 動態取得後端位址 (假設後端都在同一台機器的 8000 port)
-const BACKEND_URL = `http://${window.location.hostname}:8000`;
+// 使用 Vite Proxy (在 vite.config.js 設定轉發 /api -> weather-backend:8000)
+// 這樣瀏覽器只需要訪問 5175，不需要直接連 8000
+const BACKEND_URL = '';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('live'); // live, db
