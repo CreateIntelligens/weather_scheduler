@@ -72,6 +72,7 @@ POSTGRES_DB=weather_db
 DATABASE_URL=postgresql://weather_user:change_me@db:5432/weather_db
 
 # 內部服務設定
+APP_TIMEZONE=Asia/Taipei
 BACKEND_BASE_URL=http://weather-backend:8000
 TTS_API_URL=http://127.0.0.1:5456/api/stream-speak
 TTS_ENGINE=indextts
@@ -129,6 +130,13 @@ docker-compose -f docker-compose-frontend.yaml up --build -d
   - 再用 22 縣市資料補充降雨較明顯區域、溫度與外出提醒
   - 避免在資料未明確提供時自行推測東北季風、鋒面、高壓等天氣系統
 - 相對日期詞若出現在播報中，會要求帶上日期，例如 `今（7）日`、`明（8）日`
+
+### 5. 時區設定
+
+- 建議在 `.env` 明確設定 `APP_TIMEZONE=Asia/Taipei`
+- Backend、Scheduler 與 Docker Compose 會以 `APP_TIMEZONE` 作為主要時區設定
+- 目前預報 / 特報 / 地震在生成 AI 文字時，會以台灣時區作為「目前播報時間」基準
+- PostgreSQL 容器也會套用同一時區，因此新寫入的 `report_time`、`created_at` 會以 `+08:00` 顯示
 
 ---
 

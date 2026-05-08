@@ -7,6 +7,8 @@ services:
     env_file:
       - ../.env
     environment:
+      - TZ=${APP_TIMEZONE:-Asia/Taipei}
+      - PGTZ=${APP_TIMEZONE:-Asia/Taipei}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
@@ -26,6 +28,8 @@ services:
     env_file:
       - ../.env
     environment:
+      - TZ=${APP_TIMEZONE:-Asia/Taipei}
+      - APP_TIMEZONE=${APP_TIMEZONE:-Asia/Taipei}
       - DATABASE_URL=${DATABASE_URL}
       - CWA_API_KEY=${VITE_CWA_API_KEY}
       - GEMINI_API_KEY=${VITE_GEMINI_API_KEY}
@@ -47,6 +51,8 @@ services:
     env_file:
       - ../.env
     environment:
+      - TZ=${APP_TIMEZONE:-Asia/Taipei}
+      - APP_TIMEZONE=${APP_TIMEZONE:-Asia/Taipei}
       - PYTHONUNBUFFERED=1
       - BACKEND_BASE_URL=${BACKEND_BASE_URL}
       - TTS_API_URL=${TTS_API_URL}

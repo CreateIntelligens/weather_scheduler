@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, cast, String, text
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 # DB imports
 from database import engine, Base, get_db
@@ -53,6 +54,8 @@ OVERVIEW_FALLBACK_URL = os.getenv(
     "OVERVIEW_FALLBACK_URL",
     "https://cwaopendata.s3.ap-northeast-1.amazonaws.com/Forecast/F-C0032-031.FW50"
 )
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Taipei")
+APP_TZ = ZoneInfo(APP_TIMEZONE)
 
 TARGET_CITIES = [
     '基隆市', '臺北市', '新北市', '桃園市', '新竹市', '新竹縣', '苗栗縣', '臺中市',
@@ -116,15 +119,18 @@ class ForecastRecord(BaseModel):
 
 # --- Helper Functions ---
 
+def now_local() -> datetime:
+    return datetime.now(APP_TZ)
+
 def parse_date_range(start_date: Optional[str], end_date: Optional[str]):
     start_dt = None
     end_dt = None
 
     try:
         if start_date:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=APP_TZ)
         if end_date:
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=APP_TZ) + timedelta(days=1)
     except ValueError:
         raise HTTPException(status_code=400, detail="日期格式錯誤，請使用 YYYY-MM-DD")
 
@@ -210,7 +216,7 @@ def build_weather_prompt(overview: str, cities_summary: str, current_time: str) 
 
 async def send_to_tts_api(text: str):
     """將文字發送到 TTS 服務"""
-    print(f"[{datetime.now()}] Sending to TTS API...")
+    print(f"[{now_local()}] Sending to TTS API...")
     try:
         payload = {"engine": TTS_ENGINE, "text": text}
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -338,7 +344,7 @@ weather_cache = {"data": None, "last_updated": None}
 @app.get("/api/weather", response_model=WeatherResponse)
 async def get_weather(refresh: bool = False, db: Session = Depends(get_db)):
     global weather_cache
-    now = datetime.now()
+    now = now_local()
     
     # --- 1. 如果不是強制更新，先從 DB 抓取最新的一筆紀錄 ---
     if not refresh:
@@ -429,9 +435,9 @@ async def manual_weather_broadcast(db: Session = Depends(get_db)):
     """
     手動觸發：抓取最新天氣、生成 AI 報告並立即語音播報
     """
-    print(f"[{datetime.now()}] Manually triggering weather broadcast...")
+    print(f"[{now_local()}] Manually triggering weather broadcast...")
     async with httpx.AsyncClient() as client:
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_time = now_local().strftime("%Y-%m-%d %H:%M:%S")
         overview = await fetch_overview(client)
         cities = await fetch_cities_forecast(client)
         
@@ -523,8 +529,8 @@ async def re_report_warning(warning_id: int, db: Session = Depends(get_db)):
     if not warning:
         raise HTTPException(status_code=404, detail="找不到該特報 ID")
 
-    print(f"[{datetime.now()}] Manually re-reporting warning: {warning.title}")
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{now_local()}] Manually re-reporting warning: {warning.title}")
+    current_time = now_local().strftime("%Y-%m-%d %H:%M:%S")
 
     system_prompt = """
     你現在是一位專業的氣象主播，負責即時插播氣象特報。
@@ -570,7 +576,7 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
     """
     抓取特報 -> 比對 DB -> 若無則生成 AI 報告並播報 -> 存入 DB
     """
-    print(f"[{datetime.now()}] Checking for new warnings...")
+    print(f"[{now_local()}] Checking for new warnings...")
     if not CWA_API_KEY:
         return {"status": "error", "message": "No CWA API Key"}
 
@@ -631,7 +637,7 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
                 print(f"New Warning Found: {dataset_desc}")
                 
                 # 生成 AI 廣播稿
-                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                current_time = now_local().strftime("%Y-%m-%d %H:%M:%S")
                 system_prompt = """
                 你現在是一位專業的氣象主播，負責即時插播氣象特報。
                 請根據接收到的氣象局特報資料，撰寫一段廣播稿。
@@ -738,7 +744,7 @@ async def re_report_earthquake(eq_id: int, db: Session = Depends(get_db)):
     if not eq:
         raise HTTPException(status_code=404, detail="找不到該地震紀錄 ID")
 
-    print(f"[{datetime.now()}] Manually re-reporting earthquake: {eq.earthquake_no}")
+    print(f"[{now_local()}] Manually re-reporting earthquake: {eq.earthquake_no}")
 
     system_prompt = """
     你現在是一位專業的新聞主播，負責插播即時地震快訊。
@@ -777,7 +783,7 @@ async def check_and_process_earthquakes(db: Session = Depends(get_db)):
     """
     每分鐘檢查：抓取 CWA E-A0015-001 -> 比對 DB -> 生成報告 -> 播報 -> 存檔
     """
-    print(f"[{datetime.now()}] Checking for earthquakes...")
+    print(f"[{now_local()}] Checking for earthquakes...")
     if not CWA_API_KEY:
         return {"status": "error", "message": "No CWA API Key"}
         
