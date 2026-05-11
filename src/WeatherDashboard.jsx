@@ -259,7 +259,7 @@ export default function App() {
           <div className="space-y-10">
             {/* 1. Forecast History */}
             <DataTable 
-              title="歷史預報 Broadcast (每小時更新)" 
+              title="歷史預報 Broadcast (每日 09:00 / 12:00 / 21:00 更新)" 
               icon={CloudSun}
               iconColor="text-blue-500"
               apiUrl="/api/forecasts"

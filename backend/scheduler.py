@@ -37,8 +37,8 @@ def send_to_tts_api(text):
         print(f"[{now_local()}] TTS API Connection Error: {e}")
 
 def job_update_weather():
-    """每小時更新一般天氣"""
-    print(f"[{now_local()}] [Job] Triggering hourly weather update...")
+    """每天 09:00、12:00、21:00 更新一般天氣"""
+    print(f"[{now_local()}] [Job] Triggering scheduled weather update...")
     try:
         with httpx.Client(timeout=60.0) as client:
             resp = client.get(UPDATE_WEATHER_URL)
@@ -97,8 +97,8 @@ if __name__ == "__main__":
     # 2. 每 10 分鐘執行特報檢查 (次緊急)
     scheduler.add_job(job_check_warnings, 'cron', minute='*/10')
 
-    # 3. 每小時整點執行一般天氣預報 (例行性)
-    scheduler.add_job(job_update_weather, 'cron', minute=0)
+    # 3. 每天台灣時間 09:00、12:00、21:00 執行一般天氣預報
+    scheduler.add_job(job_update_weather, 'cron', hour='9,12,21', minute=0)
     
     # 程式啟動時，先等待 Backend Ready，然後立即執行一次檢查
     print("Waiting for backend to be ready...")
