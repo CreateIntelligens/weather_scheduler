@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import httpx
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -121,6 +122,37 @@ class ForecastRecord(BaseModel):
 
 def now_local() -> datetime:
     return datetime.now(APP_TZ)
+
+async def fetch_json_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    retries: int = 3,
+    timeout: float = 20.0,
+    label: str = "CWA API"
+):
+    last_error = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            resp = await client.get(url, timeout=timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            last_error = e
+            should_retry = True
+
+            if isinstance(e, httpx.HTTPStatusError):
+                status = e.response.status_code
+                should_retry = status in (502, 503, 504)
+
+            if attempt < retries and should_retry:
+                print(f"{label} attempt {attempt}/{retries} failed: {repr(e)}. Retrying...")
+                await asyncio.sleep(attempt)
+                continue
+            break
+
+    raise RuntimeError(f"{label} unavailable after {retries} attempts: {repr(last_error)}")
 
 def parse_date_range(start_date: Optional[str], end_date: Optional[str]):
     start_dt = None
@@ -310,9 +342,7 @@ async def fetch_cities_forecast(client: httpx.AsyncClient) -> List[CityWeather]:
     
     cities_data = []
     try:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        data = resp.json()
+        data = await fetch_json_with_retry(client, url, timeout=20.0, label="CWA forecast API")
         raw_locations = data.get("records", {}).get("location", [])
 
         for loc in raw_locations:
@@ -332,7 +362,7 @@ async def fetch_cities_forecast(client: httpx.AsyncClient) -> List[CityWeather]:
                 maxT=get_val("MaxT")
             ))
     except Exception as e:
-        print(f"Error fetching cities: {e}")
+        print(f"Error fetching cities: {repr(e)}")
         
     return cities_data
 
@@ -368,6 +398,8 @@ async def get_weather(refresh: bool = False, db: Session = Depends(get_db)):
         current_time = now.strftime("%Y-%m-%d %H:%M:%S")
         overview = await fetch_overview(client)
         cities = await fetch_cities_forecast(client)
+        if not cities:
+            raise HTTPException(status_code=503, detail="CWA 預報資料暫時無法取得，未生成新預報")
         
         cities_summary = "\n".join([f"{c.name}: {c.wx}, {c.minT}-{c.maxT}度, 降雨{c.pop}%" for c in cities])
         system_prompt, user_content = build_weather_prompt(overview, cities_summary, current_time)
@@ -440,6 +472,8 @@ async def manual_weather_broadcast(db: Session = Depends(get_db)):
         current_time = now_local().strftime("%Y-%m-%d %H:%M:%S")
         overview = await fetch_overview(client)
         cities = await fetch_cities_forecast(client)
+        if not cities:
+            raise HTTPException(status_code=503, detail="CWA 預報資料暫時無法取得，未執行播報")
         
         cities_summary = "\n".join([f"{c.name}: {c.wx}, {c.minT}-{c.maxT}度, 降雨{c.pop}%" for c in cities])
         system_prompt, user_content = build_weather_prompt(overview, cities_summary, current_time)
@@ -473,9 +507,7 @@ async def get_city_weather(city_name: str):
         if not CWA_API_KEY: raise HTTPException(status_code=500, detail="未設定 CWA API Key")
         url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization={CWA_API_KEY}&format=JSON&locationName={city_name}"
         try:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
+            data = await fetch_json_with_retry(client, url, timeout=20.0, label="CWA city forecast API")
             location = data.get("records", {}).get("location", [])
             if not location: raise HTTPException(status_code=404, detail="找不到縣市")
             loc = location[0]
@@ -484,6 +516,8 @@ async def get_city_weather(city_name: str):
                 el = next((e for e in weather_elements if e["elementName"] == name), None)
                 return el["time"][0]["parameter"]["parameterName"] if el and el.get("time") else "-"
             return CityWeather(name=loc["locationName"], wx=get_val("Wx"), pop=get_val("PoP"), minT=get_val("MinT"), maxT=get_val("MaxT"))
+        except RuntimeError as e:
+             raise HTTPException(status_code=503, detail=str(e))
         except Exception as e:
              raise HTTPException(status_code=500, detail=str(e))
 
@@ -589,9 +623,7 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
     
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
+            data = await fetch_json_with_retry(client, url, timeout=20.0, label="CWA warnings API")
             
             records = data.get("records", {}).get("record", [])
             if not isinstance(records, list):
@@ -701,7 +733,7 @@ async def check_and_process_warnings(db: Session = Depends(get_db)):
                     print(f"Error saving warning record: {e}")
                 
     except Exception as e:
-        print(f"Error processing warnings: {e}")
+        print(f"Error processing warnings: {repr(e)}")
         return {"status": "error", "message": str(e)}
 
     return {"status": "success", "new_warnings_processed": new_warnings_count}
@@ -796,9 +828,7 @@ async def check_and_process_earthquakes(db: Session = Depends(get_db)):
     new_eq_count = 0
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
+            data = await fetch_json_with_retry(client, url, timeout=20.0, label="CWA earthquakes API")
             
             # CWA 地震資料結構
             records = data.get("records", {}).get("Earthquake", [])
@@ -925,7 +955,7 @@ async def check_and_process_earthquakes(db: Session = Depends(get_db)):
                     print(f"Error saving earthquake record {eq_no}: {e}")
 
     except Exception as e:
-        print(f"Error processing earthquakes: {e}")
+        print(f"Error processing earthquakes: {repr(e)}")
         return {"status": "error", "message": str(e)}
 
     return {"status": "success", "new_earthquakes_processed": new_eq_count}
