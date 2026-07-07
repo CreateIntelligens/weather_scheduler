@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import asyncio
 import httpx
 from fastapi import FastAPI, HTTPException, Depends
@@ -9,13 +10,27 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, cast, String, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 # DB imports
 from database import engine, Base, get_db
 import models
+
+def wait_for_db(max_retries: int = 30, delay_seconds: float = 2.0):
+    """容器重啟時 db 服務可能還沒就緒（restart: always 不會重新等待 depends_on），
+    在此重試連線，避免整個 process 因單次連線失敗就崩潰。"""
+    for attempt in range(1, max_retries + 1):
+        try:
+            with engine.connect():
+                return
+        except OperationalError as e:
+            print(f"[startup] Database not ready yet (attempt {attempt}/{max_retries}): {e}")
+            time.sleep(delay_seconds)
+    raise RuntimeError(f"Database not reachable after {max_retries} attempts")
+
+wait_for_db()
 
 # 初始化資料庫 Table
 models.Base.metadata.create_all(bind=engine)
